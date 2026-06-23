@@ -1,6 +1,6 @@
 // CSCP v2 service worker — cache-first for the shell.
 // BUMP CACHE_VERSION on every deploy to invalidate old caches.
-const CACHE_VERSION = 'cscp-v2-shell-2026-06-21-01';
+const CACHE_VERSION = 'cscp-v20260623-0543-tier2';
 const SHELL = [
   './',
   './index.html',
