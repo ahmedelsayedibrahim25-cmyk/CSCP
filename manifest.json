@@ -1,3 +1,12 @@
+<!--
+  ============================================================
+   CSCP Exam Practice  V2 + Tier 1-2.3
+   Build:  cscp-v20260623-1120-fresh
+   Built:  2026-06-23T11:20:15
+   Size:   ~3.27 MB (if your upload shows <100 KB it is WRONG)
+   File:   index.html  single self-contained app, data inline
+  ============================================================
+-->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4145,7 +4154,7 @@ showHome();
 <script>
 (function tier2_2() {
 
-  var APP_VERSION = "cscp-v20260623-0641-tier2-3";
+  var APP_VERSION = "cscp-v20260623-1120-fresh";
 
   function ready(cb) {
     if (typeof DATA === 'object' && DATA && typeof state === 'object'
@@ -4500,7 +4509,7 @@ showHome();
      ============================================================ -->
 <script>
 (function tier2_3() {
-  var APP_VERSION = "cscp-v20260623-0641-tier2-3";
+  var APP_VERSION = "cscp-v20260623-1120-fresh";
   function ready(cb) {
     if (typeof DATA === 'object' && DATA && typeof state === 'object'
         && typeof saveState === 'function' && typeof showHome === 'function'
