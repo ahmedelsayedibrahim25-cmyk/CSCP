@@ -4136,4 +4136,359 @@ showHome();
 })();
 </script>
 <!-- end Tier 2.1 -->
+
+<!-- ============================================================
+     Tier 2.2: REPLACE (not wrap) PE functions to break the
+     file-scope let peView dependency. Adds visible app-version
+     badge + a Force-update button to escape stale PWA caches.
+     ============================================================ -->
+<script>
+(function tier2_2() {
+
+  var APP_VERSION = "cscp-v20260623-0635-tier2-2";
+
+  function ready(cb) {
+    if (typeof DATA === 'object' && DATA && typeof state === 'object'
+        && typeof saveState === 'function' && typeof showHome === 'function'
+        && typeof escHtml === 'function') return cb();
+    setTimeout(function(){ ready(cb); }, 60);
+  }
+
+  ready(function () {
+
+    /* ---------------------------------------------------------------
+       A. Replace startPracticeExam — uses window.peView.
+       The original `let peView` in file scope becomes dead code.
+    --------------------------------------------------------------- */
+    window.startPracticeExam = function () {
+      try {
+        if (typeof currentSession !== 'undefined') currentSession = null;
+        if (typeof fcSession      !== 'undefined') fcSession = null;
+        if (typeof bookView       !== 'undefined') bookView  = null;
+      } catch (e) {}
+      var pe = (DATA && DATA.practice_exam) || [];
+      if (!pe.length) { alert('Practice exam not loaded.'); return; }
+      // Build selections from state.answered (single source of truth)
+      var sel = {};
+      pe.forEach(function (q) {
+        var rec = state.answered[q.id];
+        if (rec && rec.selected) sel[q.id] = rec.selected;
+      });
+      window.peView = window.peView || {};
+      window.peView.selections = sel;
+      if (!window.peView.mode) window.peView.mode = 'question';
+      if (typeof window.peView.idx !== 'number') window.peView.idx = 0;
+      window.renderPracticeExam();
+    };
+
+    /* ---------------------------------------------------------------
+       B. Replace renderPracticeExam — dispatches on peView.mode.
+    --------------------------------------------------------------- */
+    window.renderPracticeExam = function () {
+      if (!window.peView) { showHome(); return; }
+      if (!window.peView.mode) window.peView.mode = 'question';
+      if (typeof window.peView.idx !== 'number') window.peView.idx = 0;
+      if (window.peView.mode === 'list') return renderPELists();
+      return renderPEQuestionMode();
+    };
+
+    /* ---------------------------------------------------------------
+       C. Question Mode (one-at-a-time)
+    --------------------------------------------------------------- */
+    function renderPEQuestionMode () {
+      var app = document.getElementById('app'); if (!app) return;
+      var pe = (DATA && DATA.practice_exam) || [];
+      if (window.peView.idx < 0) window.peView.idx = 0;
+      if (window.peView.idx >= pe.length) window.peView.idx = pe.length - 1;
+      var i = window.peView.idx;
+      var q = pe[i];
+      var sel = window.peView.selections || {};
+      // Re-sync from state.answered in case external import happened
+      var st = state.answered[q.id];
+      if (st && st.selected && !sel[q.id]) sel[q.id] = st.selected;
+      window.peView.selections = sel;
+
+      var picked  = sel[q.id] || null;
+      var hasKey  = q.answer != null;
+      var feedback = picked != null;
+      var totalAnswered = pe.reduce(function (n, qq) { return n + (sel[qq.id] ? 1 : 0); }, 0);
+      var pct = ((i+1)/pe.length)*100;
+
+      var html = ''
+        + buildPEToggle()
+        + '<div class="flex-between mb-12">'
+        +   '<div>'
+        +     '<span class="badge badge-primary">CSCP Exam</span>'
+        +     '<span class="badge">Q ' + (i+1) + ' of ' + pe.length + '</span>'
+        +     (hasKey ? '' : '<span class="badge badge-warning" title="No published answer key">No key</span>')
+        +   '</div>'
+        +   '<div class="flex gap-8">'
+        +     '<button class="btn btn-secondary" onclick="showHome()">Home</button>'
+        +     '<span class="text-muted" style="font-size:12px;align-self:center">' + totalAnswered + ' / ' + pe.length + ' answered</span>'
+        +   '</div>'
+        + '</div>'
+        + '<div class="progress-bar"><div class="progress-bar-fill" style="width:' + pct + '%"></div></div>'
+        + '<div class="card">'
+        +   '<div class="question-meta">'
+        +     '<span>CSCP Practice Exam (Forman, 75-Q)</span>'
+        +     '<span class="text-muted">id: ' + escHtml(q.id) + (q.num != null ? ' \u00b7 Q' + q.num : '') + '</span>'
+        +   '</div>'
+        +   '<div class="question-text">' + escHtml(q.question) + '</div>';
+
+      var letters = Object.keys(q.options || {}).sort();
+      html += '<div class="options">';
+      letters.forEach(function (L) {
+        var cls = 'option'; var mark = '';
+        if (feedback) {
+          cls += ' disabled';
+          if (hasKey) {
+            if (L === q.answer)            { cls += ' correct';   mark = '<span class="option-mark">&#x2713;</span>'; }
+            if (picked === L && L !== q.answer) { cls += ' incorrect'; mark = '<span class="option-mark">&#x2717;</span>'; }
+          } else if (picked === L) {
+            cls += ' selected'; mark = '<span class="option-mark">&#x25CF;</span>';
+          }
+        }
+        html += '<button class="' + cls + '" onclick="peQMPick(\'' + L + '\')"' + (feedback ? ' disabled' : '') + '>'
+              +   '<div class="option-letter">' + L + '</div>'
+              +   '<div class="option-text">' + escHtml(q.options[L]) + '</div>'
+              +   mark
+              + '</button>';
+      });
+      html += '</div>';
+
+      if (feedback) {
+        if (hasKey) {
+          var ok = picked === q.answer;
+          html += '<div class="feedback ' + (ok ? 'correct' : 'incorrect') + '">'
+                +   '<div class="feedback-title">' + (ok ? '&#x2713; Correct!' : '&#x2717; Incorrect') + '</div>'
+                +   '<div><strong>Correct: ' + q.answer + '.</strong> ' + escHtml(q.options[q.answer] || '') + '</div>'
+                + '</div>';
+        } else {
+          html += '<div class="feedback flashcard">'
+                +   '<div class="feedback-title">Selection saved</div>'
+                +   '<div>This item has no published answer key in the data set (Forman 75-Q practice exam). Verify against the publisher\u2019s Web Added Value answer key.</div>'
+                + '</div>';
+        }
+        if (q.rationale) {
+          html += '<div class="feedback flashcard" style="margin-top:8px">'
+                +   '<div class="feedback-title">Rationale</div>'
+                +   '<div>' + escHtml(q.rationale) + '</div>'
+                + '</div>';
+        }
+      }
+
+      html += '</div>'
+            + '<div class="nav-row">'
+            +   '<div class="left">'
+            +     '<button class="btn btn-secondary" onclick="peQMPrev()" ' + (i===0?'disabled':'') + '>&larr; Prev</button>'
+            +   '</div>'
+            +   '<div class="right">'
+            +     '<button class="btn" onclick="peQMNext()">' + (i===pe.length-1?'Finish':'Next &rarr;') + '</button>'
+            +   '</div>'
+            + '</div>';
+      app.innerHTML = html;
+      window.scrollTo(0, 0);
+    }
+
+    /* ---------------------------------------------------------------
+       D. List View (re-implemented to use window.peView)
+    --------------------------------------------------------------- */
+    function renderPELists () {
+      var app = document.getElementById('app'); if (!app) return;
+      var pe = (DATA && DATA.practice_exam) || [];
+      var sel = window.peView.selections || {};
+      var answered = Object.keys(sel).length;
+      var html = ''
+        + buildPEToggle()
+        + '<div class="flex-between mb-12">'
+        +   '<button class="btn btn-secondary" onclick="showHome()">&larr; Home</button>'
+        +   '<span class="badge">' + answered + ' / ' + pe.length + ' answered</span>'
+        + '</div>'
+        + '<h1>CSCP Practice Exam</h1>'
+        + '<p class="subtitle">75 questions from <i>APICS CSCP Exam Success</i> (Forman, 2018) Chapter 27.</p>'
+        + '<div class="card" style="border-left: 4px solid var(--warning); background: var(--warning-bg)">'
+        +   '<p style="margin:0;font-size:13px;line-height:1.5">'
+        +     '<strong>Note:</strong> Answers for this practice exam are not printed in the book. '
+        +     'Verify against the publisher\u2019s Web Added Value key. Your picks save automatically.'
+        +   '</p>'
+        + '</div>'
+        + '<div class="card">';
+      pe.forEach(function (q) {
+        var my = sel[q.id];
+        var optsHtml = '';
+        Object.keys(q.options || {}).sort().forEach(function (L) {
+          var cls = (my === L) ? 'pe-opt selected' : 'pe-opt';
+          optsHtml += '<div class="' + cls + '" onclick="peSelect(\'' + q.id + '\',\'' + L + '\')">'
+                    +   '<span class="pe-letter">' + L + '.</span>' + escHtml(q.options[L])
+                    + '</div>';
+        });
+        html += '<div class="pe-question">'
+              +   '<div><span class="pe-num">Q' + q.num + '.</span>'
+              +     '<span class="text-muted" style="font-size:12px">id: ' + escHtml(q.id) + '</span></div>'
+              +   '<div class="pe-text">' + escHtml(q.question) + '</div>'
+              +   '<div class="pe-opts">' + optsHtml + '</div>'
+              + '</div>';
+      });
+      html += '</div>'
+            + '<div class="card" style="text-align:center">'
+            +   '<p style="margin:0 0 12px 0">' + answered + ' of ' + pe.length + ' answered.</p>'
+            +   '<button class="btn btn-secondary" onclick="peReset()">Clear all selections</button>'
+            + '</div>';
+      app.innerHTML = html;
+    }
+
+    function buildPEToggle () {
+      var mode = (window.peView && window.peView.mode) || 'question';
+      return '<div id="peToggleBar" style="display:flex;justify-content:center;margin:0 0 12px 0;">'
+        +    '<span class="tier1-toggle">'
+        +      '<button type="button" class="' + (mode==='question'?'active':'') + '" onclick="peSwitchMode(\'question\')">Question mode</button>'
+        +      '<button type="button" class="' + (mode==='list'    ?'active':'') + '" onclick="peSwitchMode(\'list\')">List view</button>'
+        +    '</span>'
+        + '</div>';
+    }
+
+    window.peSwitchMode = function (m) {
+      if (!window.peView) return;
+      window.peView.mode = (m === 'list') ? 'list' : 'question';
+      window.renderPracticeExam();
+    };
+
+    /* ---------------------------------------------------------------
+       E. Replace peSelect / peReset (operate on window.peView and
+          write to state.answered — single source of truth).
+    --------------------------------------------------------------- */
+    window.peSelect = function (qid, letter) {
+      if (!window.peView) return;
+      window.peView.selections = window.peView.selections || {};
+      var pe = (DATA && DATA.practice_exam) || [];
+      var q = pe.find(function (x) { return x.id === qid; });
+      if (!q) return;
+      // Toggle off if same letter
+      if (window.peView.selections[qid] === letter) {
+        delete window.peView.selections[qid];
+        if (state.answered[qid]) { delete state.answered[qid]; saveState(); }
+      } else {
+        window.peView.selections[qid] = letter;
+        var correct = (q.answer != null) ? (letter === q.answer) : null;
+        state.answered[qid] = { selected: letter, correct: correct, timestamp: Date.now(), section: 'practice_exam' };
+        saveState();
+      }
+      // Find idx for question-mode sync
+      var idx = pe.findIndex(function (x) { return x.id === qid; });
+      if (idx >= 0) window.peView.idx = idx;
+      window.renderPracticeExam();
+    };
+
+    window.peReset = function () {
+      if (!window.peView) return;
+      if (!confirm('Clear all your CSCP Practice Exam answers?')) return;
+      var pe = (DATA && DATA.practice_exam) || [];
+      pe.forEach(function (q) {
+        if (state.answered[q.id]) delete state.answered[q.id];
+      });
+      saveState();
+      window.peView.selections = {};
+      window.peView.idx = 0;
+      window.renderPracticeExam();
+    };
+
+    /* ---------------------------------------------------------------
+       F. Question Mode click handlers
+    --------------------------------------------------------------- */
+    window.peQMPick = function (letter) {
+      if (!window.peView) return;
+      var pe = (DATA && DATA.practice_exam) || [];
+      var q = pe[window.peView.idx]; if (!q) return;
+      window.peView.selections = window.peView.selections || {};
+      window.peView.selections[q.id] = letter;
+      var correct = (q.answer != null) ? (letter === q.answer) : null;
+      state.answered[q.id] = { selected: letter, correct: correct, timestamp: Date.now(), section: 'practice_exam' };
+      saveState();
+      window.renderPracticeExam();
+    };
+    window.peQMNext = function () {
+      if (!window.peView) return;
+      var pe = (DATA && DATA.practice_exam) || [];
+      if (window.peView.idx < pe.length - 1) { window.peView.idx++; window.renderPracticeExam(); }
+      else { showHome(); }
+    };
+    window.peQMPrev = function () {
+      if (!window.peView) return;
+      if (window.peView.idx > 0) { window.peView.idx--; window.renderPracticeExam(); }
+    };
+
+    /* ---------------------------------------------------------------
+       G. Force-rebind any existing PE home card so the OLD reference
+          held by .onclick gets replaced with the new function.
+    --------------------------------------------------------------- */
+    function rebindPEHomeCard () {
+      var c = document.getElementById('peHomeCard');
+      if (c) c.onclick = window.startPracticeExam;
+    }
+
+    /* ---------------------------------------------------------------
+       H. APP VERSION BADGE + FORCE UPDATE BUTTON on home page.
+    --------------------------------------------------------------- */
+    function injectVersionUI () {
+      var hdr = document.querySelector('header .header-actions');
+      if (!hdr) return;
+      if (!document.getElementById('t22-update-btn')) {
+        var u = document.createElement('button');
+        u.id = 't22-update-btn';
+        u.className = 'icon-btn';
+        u.title = 'Force update (clear SW + caches and reload)';
+        u.setAttribute('aria-label','Force update');
+        u.innerHTML = '&#x21BB; <span class="icon-btn-label" style="margin-left:4px">Update</span>';
+        u.onclick = function () {
+          if (!confirm('Clear the app cache and reload to get the newest version?')) return;
+          var done = function () { location.reload(true); };
+          var jobs = [];
+          if ('serviceWorker' in navigator) {
+            jobs.push(navigator.serviceWorker.getRegistrations().then(function (regs) {
+              return Promise.all(regs.map(function (r) { return r.unregister(); }));
+            }));
+          }
+          if (window.caches && caches.keys) {
+            jobs.push(caches.keys().then(function (keys) {
+              return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+            }));
+          }
+          Promise.all(jobs).catch(function(){}).finally(done);
+        };
+        hdr.appendChild(u);
+      }
+      // version badge in app body
+      var app = document.getElementById('app');
+      if (app && !document.getElementById('t22-ver-badge')) {
+        var v = document.createElement('div');
+        v.id = 't22-ver-badge';
+        v.style.cssText = 'text-align:center;font-size:11px;color:var(--text-muted);margin:6px 0 -4px;';
+        v.innerHTML = 'Build: <code>' + APP_VERSION + '</code> &middot; '
+                    + '<a href="#" id="t22-show-info" style="color:var(--primary);text-decoration:none">what changed</a>';
+        // Insert before #app's first child (top of home)
+        app.insertBefore(v, app.firstChild);
+        var inf = document.getElementById('t22-show-info');
+        if (inf) inf.onclick = function (e) {
+          e.preventDefault();
+          alert('Tier 2.2:\n\n\u2022 CSCP Exam now opens in Question mode by default (one Q at a time, Prev/Next/Home).\n\u2022 List view kept as a toggle option.\n\u2022 Picks persist across reload (no repeat).\n\u2022 The 74 null-answer items track as "seen" only.\n\u2022 Forman content (317 in main bank) graded normally.\n\u2022 Export / Import in header.\n\u2022 Press "Update" if behaviour ever looks stuck \u2014 it clears the SW cache.');
+        };
+      }
+    }
+
+    /* Hook showHome to (a) inject UI, (b) rebind the PE card */
+    var _origShowHomeT22 = window.showHome;
+    window.showHome = function () {
+      _origShowHomeT22.apply(this, arguments);
+      try { injectVersionUI(); } catch (e) {}
+      try { rebindPEHomeCard(); } catch (e) {}
+    };
+    setTimeout(function () { try { injectVersionUI(); rebindPEHomeCard(); } catch (e) {} }, 0);
+    // Also rebind right now (in case the home card already exists)
+    rebindPEHomeCard();
+
+    try { console.log('[tier2.2] APP_VERSION =', APP_VERSION); } catch(e) {}
+  });
+})();
+</script>
+<!-- end Tier 2.2 -->
 </body></html>
