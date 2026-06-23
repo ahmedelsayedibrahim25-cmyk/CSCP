@@ -4145,7 +4145,7 @@ showHome();
 <script>
 (function tier2_2() {
 
-  var APP_VERSION = "cscp-v20260623-0635-tier2-2";
+  var APP_VERSION = "cscp-v20260623-0641-tier2-3";
 
   function ready(cb) {
     if (typeof DATA === 'object' && DATA && typeof state === 'object'
@@ -4491,4 +4491,300 @@ showHome();
 })();
 </script>
 <!-- end Tier 2.2 -->
+
+<!-- ============================================================
+     Tier 2.3: Question Mode for Book Browser → Browse by Book
+     Order (the 317 Forman content items). Completely replaces
+     renderBookByOrder + bookAnswer using state.answered as the
+     single source of truth.
+     ============================================================ -->
+<script>
+(function tier2_3() {
+  var APP_VERSION = "cscp-v20260623-0641-tier2-3";
+  function ready(cb) {
+    if (typeof DATA === 'object' && DATA && typeof state === 'object'
+        && typeof saveState === 'function' && typeof showHome === 'function'
+        && typeof escHtml === 'function'
+        && typeof getBookQuestions === 'function'
+        && typeof chapterIndexFor === 'function'
+        && Array.isArray(BOOK_CHAPTER_ORDER)
+        && typeof renderBookByOrder === 'function') return cb();
+    setTimeout(function(){ ready(cb); }, 60);
+  }
+
+  ready(function () {
+    var BOOK_NAME = 'CSCP Exam Success';   // only book in DATA.books
+
+    // window-scoped mode + index (no dependency on file-scope bookView)
+    if (!window.bookOrderState) window.bookOrderState = { mode: 'question', idx: 0 };
+
+    function getOrderedQs () {
+      var qs = (typeof getBookQuestions === 'function') ? getBookQuestions(BOOK_NAME) : [];
+      qs = qs.slice();
+      qs.sort(function (a, b) {
+        var ai = chapterIndexFor(a.topic), bi = chapterIndexFor(b.topic);
+        if (ai !== bi) return ai - bi;
+        var ap = parseInt(a.page) || 9999;
+        var bp = parseInt(b.page) || 9999;
+        if (ap !== bp) return ap - bp;
+        return (a.id || '').localeCompare(b.id || '');
+      });
+      return qs;
+    }
+
+    function answeredFor (qid) {
+      // single source of truth: state.answered
+      return state.answered[qid] || null;
+    }
+    function attemptsMap (qs) {
+      var out = {};
+      qs.forEach(function (q) {
+        var a = state.answered[q.id];
+        if (a) out[q.id] = a;
+      });
+      return out;
+    }
+
+    /* =====================================================
+       Replace bookAnswer to write ONLY to state.answered.
+    ===================================================== */
+    window.bookAnswer = function (qid, letter) {
+      // Idempotency: don't overwrite an existing answer (matches the
+      // original behaviour but using the unified store).
+      if (state.answered[qid]) return;
+      var q = (DATA.questions || []).find(function (x) { return x.id === qid; });
+      if (!q) return;
+      var correct = letter === q.answer;
+      state.answered[qid] = { selected: letter, correct: correct, timestamp: Date.now(), section: 'book_order' };
+      if (q.module != null) {
+        if (!state.moduleScores[q.module]) state.moduleScores[q.module] = { correct: 0, total: 0 };
+        state.moduleScores[q.module].total++;
+        if (correct) state.moduleScores[q.module].correct++;
+      }
+      saveState();
+      var scrollY = window.scrollY;
+      // Stay on whichever sub-view the user was in
+      window.renderBookByOrder();
+      setTimeout(function () { window.scrollTo(0, scrollY); }, 0);
+    };
+
+    window.bookResetAttempts = function () {
+      if (!confirm('Reset all Book-Order attempts? (Clears state.answered for these 317 items only.)')) return;
+      var qs = getOrderedQs();
+      qs.forEach(function (q) {
+        if (state.answered[q.id]) delete state.answered[q.id];
+      });
+      saveState();
+      window.renderBookByOrder();
+    };
+
+    /* =====================================================
+       Replace renderBookByOrder — dispatches on mode.
+    ===================================================== */
+    window.renderBookByOrder = function () {
+      var qs = getOrderedQs();
+      var att = attemptsMap(qs);
+      var answered = qs.filter(function (q) { return att[q.id]; }).length;
+      var correct  = qs.filter(function (q) { return att[q.id] && att[q.id].correct === true; }).length;
+      if (!window.bookOrderState.mode) window.bookOrderState.mode = 'question';
+      if (window.bookOrderState.mode === 'list') {
+        return renderBOList(qs, att, answered, correct);
+      }
+      return renderBOQuestion(qs, att, answered, correct);
+    };
+
+    function buildBOToggle () {
+      var mode = window.bookOrderState.mode;
+      return '<div id="boToggleBar" style="display:flex;justify-content:center;margin:0 0 12px 0;">'
+        +    '<span class="tier1-toggle">'
+        +      '<button type="button" class="' + (mode==='question'?'active':'') + '" onclick="boSwitchMode(\'question\')">Question mode</button>'
+        +      '<button type="button" class="' + (mode==='list'    ?'active':'') + '" onclick="boSwitchMode(\'list\')">List view</button>'
+        +    '</span>'
+        + '</div>';
+    }
+    window.boSwitchMode = function (m) {
+      window.bookOrderState.mode = (m === 'list') ? 'list' : 'question';
+      window.renderBookByOrder();
+    };
+
+    /* =====================================================
+       Question Mode (one-at-a-time)
+    ===================================================== */
+    function renderBOQuestion (qs, att, answered, correct) {
+      var app = document.getElementById('app'); if (!app) return;
+      if (window.bookOrderState.idx < 0) window.bookOrderState.idx = 0;
+      if (window.bookOrderState.idx >= qs.length) window.bookOrderState.idx = qs.length - 1;
+      var i = window.bookOrderState.idx;
+      var q = qs[i];
+      var my = att[q.id];
+      var feedback = !!my;
+      var pct = ((i+1)/qs.length)*100;
+
+      var html = ''
+        + '<div class="flex-between mb-12">'
+        +   '<button class="btn btn-secondary" onclick="renderBookHome()">&larr; CSCP Exam Success</button>'
+        +   '<span class="badge">Book Order &middot; ' + qs.length + ' Q &middot; ' + answered + ' answered' + (answered>0 ? ' &middot; ' + Math.round(correct/answered*100) + '%' : '') + '</span>'
+        + '</div>'
+        + buildBOToggle()
+        + '<div class="flex-between mb-12">'
+        +   '<div>'
+        +     '<span class="badge badge-primary">CSCP Exam Success</span>'
+        +     '<span class="badge">Q ' + (i+1) + ' of ' + qs.length + '</span>'
+        +     (q.page ? '<span class="badge" style="background:var(--primary);color:white">Page ' + escHtml(String(q.page)) + '</span>' : '')
+        +   '</div>'
+        +   '<div class="flex gap-8">'
+        +     '<button class="btn btn-secondary" onclick="showHome()">Home</button>'
+        +   '</div>'
+        + '</div>'
+        + '<div class="progress-bar"><div class="progress-bar-fill" style="width:' + pct + '%"></div></div>'
+        + '<div class="card">'
+        +   '<div class="question-meta">'
+        +     '<span>' + escHtml(q.topic || 'Forman') + '</span>'
+        +     '<span class="text-muted">id: ' + escHtml(q.id) + '</span>'
+        +   '</div>'
+        +   '<div class="question-text">' + escHtml(q.question) + '</div>';
+
+      var letters = Object.keys(q.options || {}).sort();
+      html += '<div class="options">';
+      letters.forEach(function (L) {
+        var cls = 'option'; var mark = '';
+        if (feedback) {
+          cls += ' disabled';
+          if (L === q.answer)                  { cls += ' correct';   mark = '<span class="option-mark">&#x2713;</span>'; }
+          if (my.selected === L && L !== q.answer) { cls += ' incorrect'; mark = '<span class="option-mark">&#x2717;</span>'; }
+        }
+        html += '<button class="' + cls + '" onclick="bookAnswer(\'' + q.id + '\',\'' + L + '\')"' + (feedback?' disabled':'') + '>'
+              +   '<div class="option-letter">' + L + '</div>'
+              +   '<div class="option-text">' + escHtml(q.options[L]) + '</div>'
+              +   mark
+              + '</button>';
+      });
+      html += '</div>';
+
+      if (feedback) {
+        var ok = my.selected === q.answer;
+        html += '<div class="feedback ' + (ok ? 'correct' : 'incorrect') + '">'
+              +   '<div class="feedback-title">' + (ok ? '&#x2713; Correct!' : '&#x2717; Incorrect') + '</div>'
+              +   '<div><strong>Correct: ' + q.answer + '.</strong> ' + escHtml(q.options[q.answer] || '') + '</div>'
+              +   (q.rationale ? '<div style="margin-top:8px"><strong>Rationale:</strong> ' + escHtml(q.rationale) + '</div>' : '')
+              + '</div>';
+      }
+      html += '</div>'
+            + '<div class="nav-row">'
+            +   '<div class="left">'
+            +     '<button class="btn btn-secondary" onclick="boPrev()" ' + (i===0?'disabled':'') + '>&larr; Prev</button>'
+            +   '</div>'
+            +   '<div class="right">'
+            +     '<button class="btn" onclick="boNext()">' + (i===qs.length-1?'Finish':'Next &rarr;') + '</button>'
+            +   '</div>'
+            + '</div>';
+      app.innerHTML = html;
+      window.scrollTo(0, 0);
+    }
+    window.boNext = function () {
+      var qs = getOrderedQs();
+      if (window.bookOrderState.idx < qs.length - 1) {
+        window.bookOrderState.idx++;
+        window.renderBookByOrder();
+      } else {
+        showHome();
+      }
+    };
+    window.boPrev = function () {
+      if (window.bookOrderState.idx > 0) {
+        window.bookOrderState.idx--;
+        window.renderBookByOrder();
+      }
+    };
+
+    /* =====================================================
+       List View — re-implemented, reads state.answered
+    ===================================================== */
+    function renderBOList (qs, att, answered, correct) {
+      var app = document.getElementById('app'); if (!app) return;
+      // Group by chapter
+      var byCh = {};
+      qs.forEach(function (q) {
+        var idx = chapterIndexFor(q.topic);
+        (byCh[idx] = byCh[idx] || []).push(q);
+      });
+      var idxs = Object.keys(byCh).map(Number).sort(function (a,b){return a-b;});
+
+      var jumpBar = '<div class="module-bar" style="margin-bottom:14px;flex-wrap:wrap">'
+                  + '<span class="text-muted" style="font-size:12px;padding:6px 4px">Jump to chapter:</span>';
+      idxs.forEach(function (idx) {
+        if (idx === 99) return;
+        var ch = BOOK_CHAPTER_ORDER[idx];
+        jumpBar += '<a class="module-pill" href="#ch' + ch[1] + '" style="text-decoration:none">Ch ' + ch[1] + ' (' + byCh[idx].length + ')</a>';
+      });
+      jumpBar += '</div>';
+
+      var html = ''
+        + '<div class="flex-between mb-12">'
+        +   '<button class="btn btn-secondary" onclick="renderBookHome()">&larr; ' + escHtml(BOOK_NAME) + '</button>'
+        +   '<span class="badge">Book Order &middot; ' + qs.length + ' questions &middot; ' + answered + ' answered' + (answered>0 ? ' &middot; ' + Math.round(correct/answered*100) + '%' : '') + '</span>'
+        + '</div>'
+        + '<h2>' + escHtml(BOOK_NAME) + ' \u2014 Browse by Book Order</h2>'
+        + '<p class="subtitle">All ' + qs.length + ' extracted questions in the exact order they appear in the book, with the printed page number shown for each.</p>'
+        + buildBOToggle()
+        + jumpBar;
+
+      idxs.forEach(function (idx) {
+        var chQs = byCh[idx];
+        if (idx === 99) {
+          html += '<div class="card"><h2>Other / Uncategorized (' + chQs.length + ')</h2>';
+        } else {
+          var ch = BOOK_CHAPTER_ORDER[idx];
+          html += '<div class="card" id="ch' + ch[1] + '"><h2>Chapter ' + ch[1] + ' \u2014 ' + escHtml(ch[0]) + ' (' + chQs.length + ' question' + (chQs.length===1?'':'s') + ')</h2>';
+        }
+        chQs.forEach(function (q, i) {
+          var my = att[q.id];
+          var letters = Object.keys(q.options || {}).sort();
+          var opts = '';
+          letters.forEach(function (L) {
+            var cls = 'q-option'; var mark = '';
+            if (my) {
+              if (L === q.answer)                      { cls += ' correct';   mark = '<span style="float:right;font-weight:700">&#x2713;</span>'; }
+              if (my.selected === L && L !== q.answer) { cls += ' incorrect'; mark = '<span style="float:right;font-weight:700">&#x2717;</span>'; }
+            } else { cls += ' clickable'; }
+            var click  = my ? '' : 'onclick="bookAnswer(\'' + q.id + '\',\'' + L + '\')"';
+            var cursor = my ? 'default' : 'pointer';
+            opts += '<div class="' + cls + '" ' + click + ' style="cursor:' + cursor + '"><span class="q-letter">' + L + '.</span>' + escHtml(q.options[L]) + mark + '</div>';
+          });
+          var pageBadge = q.page ? '<span class="page-badge" style="background:var(--primary);color:white;font-weight:700;padding:3px 10px">Page ' + escHtml(String(q.page)) + '</span>' : '';
+          var feedback = '';
+          if (my) {
+            var ok = my.selected === q.answer;
+            feedback = '<div class="feedback ' + (ok?'correct':'incorrect') + '" style="margin-top:10px">'
+                     +   '<div class="feedback-title">' + (ok?'&#x2713; Correct':'&#x2717; Incorrect') + ' &middot; Answer: ' + q.answer + '</div>'
+                     +   (q.rationale ? '<div style="margin-top:6px"><strong>Rationale:</strong> ' + escHtml(q.rationale) + '</div>' : '')
+                     + '</div>';
+          }
+          html += '<div class="book-q-item">'
+                +   '<div class="q-meta">'
+                +     '<span class="q-num">Q' + (i+1) + '</span>'
+                +     pageBadge
+                +     '<span class="q-topic">' + escHtml(q.topic||'') + '</span>'
+                +     '<span class="badge">' + escHtml(q.id) + '</span>'
+                +   '</div>'
+                +   '<div class="q-text">' + escHtml(q.question) + '</div>'
+                +   '<div class="q-options">' + opts + '</div>'
+                +   feedback
+                + '</div>';
+        });
+        html += '</div>';
+      });
+
+      html += '<div class="card" style="text-align:center;position:sticky;bottom:0">'
+            +   '<p style="margin:0 0 12px 0"><strong>' + answered + '/' + qs.length + ' answered</strong> &middot; ' + correct + ' correct' + (answered>0 ? ' (' + Math.round(correct/answered*100) + '%)' : '') + '</p>'
+            +   '<button class="btn btn-secondary" onclick="bookResetAttempts()">Reset attempts</button>'
+            + '</div>';
+      app.innerHTML = html;
+    }
+
+    try { console.log('[tier2.3] APP_VERSION =', APP_VERSION); } catch(e){}
+  });
+})();
+</script>
+<!-- end Tier 2.3 -->
 </body></html>
