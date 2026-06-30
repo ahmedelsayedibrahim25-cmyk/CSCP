@@ -1,6 +1,6 @@
 // CSCP v2 service worker — cache-first for the shell.
-// BUMP CACHE_VERSION on every deploy to invalidate old caches.
-const CACHE_VERSION = 'cscp-v20260623-1120-fresh';
+// Bumped to invalidate after Hisham repeat-bug fix + flashcard/MCQ separation.
+const CACHE_VERSION = 'cscp-v20260630-0611-hishamfix';
 const SHELL = [
   './',
   './index.html',
@@ -10,44 +10,34 @@ const SHELL = [
   './assets/icon-512.png'
 ];
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_VERSION)
-      .then((cache) => cache.addAll(SHELL))
-      .then(() => self.skipWaiting())
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE_VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())
   );
 });
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k))
-      )
-    ).then(() => self.clients.claim())
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys()
+      .then(ks => Promise.all(ks.filter(k => k !== CACHE_VERSION).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
-// Cache-first: serve from cache when offline; refresh in background.
-self.addEventListener('fetch', (event) => {
-  const req = event.request;
-  if (req.method !== 'GET') return;
-  const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return;
-
-  event.respondWith(
-    caches.match(req).then((cached) => {
-      const fetchPromise = fetch(req)
-        .then((resp) => {
-          // Cache successful same-origin responses for the shell.
-          if (resp && resp.status === 200 && resp.type === 'basic') {
-            const copy = resp.clone();
-            caches.open(CACHE_VERSION).then((c) => c.put(req, copy));
-          }
-          return resp;
-        })
-        .catch(() => cached || caches.match('./index.html'));
-      return cached || fetchPromise;
+self.addEventListener('fetch', e => {
+  const r = e.request;
+  if (r.method !== 'GET') return;
+  if (new URL(r.url).origin !== self.location.origin) return;
+  e.respondWith(
+    caches.match(r).then(cached => {
+      const fp = fetch(r).then(resp => {
+        if (resp && resp.status === 200 && resp.type === 'basic') {
+          const cc = resp.clone();
+          caches.open(CACHE_VERSION).then(c => c.put(r, cc));
+        }
+        return resp;
+      }).catch(() => cached || caches.match('./index.html'));
+      return cached || fp;
     })
   );
 });
